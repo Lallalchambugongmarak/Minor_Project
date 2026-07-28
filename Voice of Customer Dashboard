@@ -1,0 +1,62 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from transformers import pipeline
+
+st.set_page_config(page_title="Voice of Customer Dashboard", layout="wide")
+st.title("35. Voice of Customer Dashboard")
+
+# 1. Load dummy data - replace with your CSVs later
+data = {
+    'date': pd.date_range('2026-01-01', periods=100, freq='D'),
+    'source': ['Google']*40 + ['Support']*30 + ['Twitter']*30,
+    'feedback': ['Great product love it']*20 + ['Bad service']*20 + ['Okay but slow']*20 + ['Amazing support']*20 + ['Terrible experience']*20,
+    'rating': [5]*20 + [1]*20 + [3]*20 + [5]*20 + [1]*20
+}
+df = pd.DataFrame(data)
+
+# 2. NLP
+@st.cache_resource
+def load_nlp():
+    vader = SentimentIntensityAnalyzer()
+    bert = pipeline("sentiment-analysis")
+    return vader, bert
+
+vader, bert = load_nlp()
+
+def analyze(text):
+    v_score = vader.polarity_scores(text)['compound']
+    sentiment = 'Positive' if v_score > 0.05 else 'Negative' if v_score < -0.05 else 'Neutral'
+    b_res = bert(text[:512])[0]
+    return sentiment, v_score, b_res['label'], b_res['score']
+
+results = df['feedback'].apply(lambda x: analyze(x))
+df[['sentiment', 'sentiment_score', 'bert_label', 'bert_confidence']] = pd.DataFrame(results.tolist(), index=df.index)
+
+# 3. KPIs
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Total Feedback", len(df))
+col2.metric("Positive %", f"{(df.sentiment=='Positive').mean()*100:.1f}%")
+col3.metric("Negative %", f"{(df.sentiment=='Negative').mean()*100:.1f}%")
+col4.metric("Avg Rating", f"{df.rating.mean():.2f}")
+
+# 4. Charts
+col1, col2 = st.columns(2)
+with col1:
+    fig1 = px.pie(df, names='sentiment', title='Sentiment Distribution')
+    st.plotly_chart(fig1, use_container_width=True)
+
+with col2:
+    df_time = df.groupby([df.date.dt.to_period("M"), 'sentiment']).size().reset_index(name='count')
+    df_time['date'] = df_time['date'].astype(str)
+    fig2 = px.line(df_time, x='date', y='count', color='sentiment', title='Sentiment Over Time')
+    st.plotly_chart(fig2, use_container_width=True)
+
+# By Source
+fig3 = px.bar(df, x='source', color='sentiment', title='Feedback by Source')
+st.plotly_chart(fig3, use_container_width=True)
+
+# 5. Feedback Table - FIXED LINE
+st.subheader("Recent Feedback")
+st.dataframe(df[['date', 'source', 'feedback', 'sentiment', 'bert_confidence']].sort_values('date', ascending=False))
